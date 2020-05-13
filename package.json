@@ -1,0 +1,21 @@
+{
+  "name": "wordpress-auto-install",
+  "version": "1.0.0",
+  "description": "A CLI to install a new WordPress site, with complete automation from creating the database to creating pages.",
+  "main": "watcher.js",
+  "scripts": {
+    "watch": "node watcher.js",
+    "build": "node builder.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jackson-lewis/wordpress-auto-install.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/jackson-lewis/wordpress-auto-install/issues"
+  },
+  "homepage": "https://github.com/jackson-lewis/wordpress-auto-install#readme"
+}

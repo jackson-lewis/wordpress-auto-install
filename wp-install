@@ -1,0 +1,271 @@
+#!/bin/bash
+
+# These are our colour values
+red=$'\e[1;31m'
+green=$'\e[1;32m'
+blue=$'\e[1;34m'
+magenta=$'\e[1;35m'
+cyan=$'\e[1;36m'
+white=$'\e[0m'
+
+
+# Load the config
+. ~/.wp-install-config || exit 1
+
+
+display_usage() {
+    echo "Server:" $SERVER
+    echo -e "Automate your WordPress install"
+    echo
+    echo "Build commands:"
+    echo "    init                   Start new WordPress installation process"
+    echo
+    echo "Issues? https://github.com/jackson-lewis/wordpress-auto-install/issues"
+}
+
+
+esc_slashes() {
+
+	local str=$1
+
+	echo ${str//\//\\/}
+}
+
+
+# # if less than one arguments supplied, display usage
+if [  $# -le 0 ]
+then
+    display_usage
+
+    exit 1
+fi
+
+
+# Setup a new project
+if [ $1 = "init" ]
+then
+
+	PROJECT_NAME=$2
+
+	echo $cyan'Installing' $PROJECT_NAME', sit back and relax...'$white
+
+	# Begin timer
+	SECONDS=0
+	
+	# Get WordPress Enhanced Workflow
+	echo $cyan"Downloading WordPress Enhanced Workflow..."$white
+	curl -LO https://github.com/jackson-lewis/wordpress-enhanced-workflow/archive/master.zip
+
+	unzip master.zip
+	rm master.zip
+
+	mv wordpress-enhanced-workflow-master $PROJECT_NAME
+	cd $PROJECT_NAME
+
+	rm .gitignore
+	mv .gitignore-sample .gitignore
+
+	# Edit config file
+	sed -i '' -e 's/BARE_DOMAIN=""/BARE_DOMAIN="'"$PROJECT_NAME"'"/g' .scripts/config.conf
+	sed -i '' -e 's/REPO_SSH=""/REPO_SSH="'$REPO_HOST'\/'$REPO_USER'\/'"$PROJECT_NAME"'.git"/g' .scripts/config.conf
+
+	vi .scripts/config.conf
+
+	# Load config file
+	. .scripts/config.conf
+
+	# Escape it
+	ESC_DEV_URL=$(esc_slashes $DEV_URL)
+
+
+    if [[ $SERVER == 'mamp' ]]
+    then
+
+        DOC_ROOT_RAW=$(grep 'DocumentRoot "' /Applications/MAMP/conf/apache/httpd.conf)
+        DOCUMENT_ROOT=$( echo ${DOC_ROOT_RAW#DocumentRoot } )
+        DOCUMENT_ROOT=$( echo ${str//\"//} )
+        
+        # Add local url to MAMP Virtual Hosts file
+        sed -i '' -e '$ a\
+        \
+        <VirtualHost *:80>\
+        \    ServerAdmin dev@'"$BARE_DOMAIN"'.test\
+        \    DocumentRoot "'$DOCUMENT_ROOT'/'$PROJECT_NAME'"\
+        \    ServerName '"$BARE_DOMAIN"'.test\
+        \    ServerAlias www.'"$BARE_DOMAIN"'.test\
+        </VirtualHost>' /Applications/MAMP/conf/apache/extra/httpd-vhosts.conf
+
+        echo $cyan"You are about to sudo so your hosts file can be updated."$white
+        # Add lcoal url to hosts file
+        sudo sed -i '' -e '$ a\
+        \
+        127.0.0.1    '"$BARE_DOMAIN"'.test\
+        127.0.0.1    www.'"$BARE_DOMAIN"'.test' /etc/hosts
+
+        sudo killall -HUP mDNSResponder
+    fi
+
+
+	# Auto fill package.json
+	sed -i '' -e 's/production_url/'"$PROJECT_NAME"'/g' package.json
+
+
+	# Auto fill in wp-cli.yml
+	if [[ -n $STAGING_USER ]]; then
+		sed -i '' -e 's/staging_user/'"$STAGING_USER"'/g' wp-cli.yml
+	fi
+
+	if [[ -n $STAGING_HOST ]]; then
+		sed -i '' -e 's/staging_host/'"$STAGING_HOST"'/g' wp-cli.yml
+	fi
+
+	if [[ -n $STAGING_PATH ]]; then
+		ESC_STAGING_PATH=$(esc_slashes $STAGING_PATH)
+
+		sed -i '' -e 's/staging_path/'"$ESC_STAGING_PATH"'/g' wp-cli.yml
+	fi
+
+	if [[ -n $PRODUCTION_USER ]]; then
+		sed -i '' -e 's/production_user/'"$PRODUCTION_USER"'/g' wp-cli.yml
+	fi
+
+	if [[ -n $PRODUCTION_HOST ]]; then
+		sed -i '' -e 's/production_host/'"$PRODUCTION_HOST"'/g' wp-cli.yml
+	fi
+
+	if [[ -n $PRODUCTION_PATH ]]; then
+		ESC_PRODUCTION_PATH=$(esc_slashes $PRODUCTION_PATH)
+
+		sed -i '' -e 's/production_path/'"$ESC_PRODUCTION_PATH"'/g' wp-cli.yml
+	fi
+	
+
+	# Create database
+	dbname_pre=dev_$PROJECT_NAME
+	dbname=${dbname_pre//-/}
+
+	mysql -u root -proot -e "CREATE DATABASE ${dbname};"
+
+
+	# Wordpress installation
+	wp core download --locale=en_GB --skip-content
+
+	# Setup  wp-config.php
+	wp config create --dbname=${dbname} --dbuser=root --dbpass=root
+	chmod 644 wp-config.php
+
+	# Do the WP install
+	wp core install --url=$DEV_URL --title="$SITE_TITLE" --admin_user="$WP_ADMIN_USER" --admin_password="$WP_ADMIN_PASS" --admin_email="$WP_ADMIN_EMAIL" --skip-email
+
+	# Set the rewrite structures
+	wp rewrite structure $WP_PERMALINK_STRUCTURE
+	wp rewrite flush
+
+	# Delete the hello world post
+	wp post delete 1
+
+	# Rename the Sample page to Home and remove content
+	wp post update 2 --post_title=Home --post_content=""
+
+	# Publish the Privacy Policy
+	wp post update 3 --post_status=publish
+
+	# Set the admin user details
+	wp user meta update jacko first_name "$WP_ADMIN_USER_FIRSTNAME"
+	wp user meta update jacko last_name "$WP_ADMIN_USER_LASTNAME"
+	wp user meta update jacko nickname "$WP_ADMIN_USER_NICKNAME"
+	wp user meta update jacko admin_color "$WP_ADMIN_USER_COLOR"
+	wp user update jacko --display_name="$WP_ADMIN_USER_DISPLAYNAME"
+
+	cp wp-config.php wp-config-staging.php
+	cp wp-config.php wp-config-production.php
+
+	# Installation complete
+	echo $green"Wordpress Installation complete!"$white
+	sleep 2
+	echo
+	
+
+	# Themes...
+    
+	# Get Shiftr theme
+	wp theme install "$WP_THEME" --activate
+
+    # Run Shiftr specific tasks
+    if [[ ! $(wp theme is-active shiftr) ]]
+    then
+        # Install npm packages for theme build
+        npm -s run install
+
+        sudo sed -i '' -e 's/shiftr.source/'$ESC_DEV_URL'/' wp-content/themes/shiftr/gulpfile.js
+    fi
+
+	# Theme complete
+	echo $green"Theme installation complete!"$white
+	sleep 2
+	echo
+	
+
+	# Plugins...
+    
+    IFS=',' read -ra PLUGINS <<< "$WP_DEFAULT_PLUGINS"
+
+
+    for i in "${PLUGINS[@]}"; do
+
+        if [[ $plugin == 'acf-pro' ]] && [[ -n $ACF_KEY ]]
+        then
+            wp plugin install "https://connect.advancedcustomfields.com/index.php?a=download&p=pro&k=$ACF_KEY" --activate
+
+        else
+            wp $plugin install plugin --activate
+        fi
+    done
+
+
+	# Plugins complete
+	echo $green"Plugins installation complete!"$white
+	sleep 2
+	echo
+	
+
+	# Set the Home page to be the static front page
+	wp option update page_on_front 2
+	wp option update show_on_front "page"
+
+
+	# Create navigation menus
+	wp menu create "Primary Nav"
+	wp menu location assign primary-nav header-primary
+
+
+	# Set-up Git
+	if [[ $REPO_INIT == 'true' ]]
+    then
+
+        if [[ $GITHUB_REPO_CREATE == 'true' ]]
+        then
+            gh repo create $PROJECT_NAME
+        else
+            git remote add origin $REPO_SSH
+        fi
+    fi
+
+	# Display completion
+	duration=$(( SECONDS - start ))
+	echo $green"Installation of" "$SITE_TITLE" "successfully completed in $SECONDS""s"$white
+	echo ''
+	echo $cyan"Now, get building!"$white
+
+	stop
+	start
+
+	# Open sublime and admin in browser
+	code .
+	open -a "Google Chrome" "$DEV_URL"/wp-login.php
+
+	# Start the build
+	npm -s run build
+
+fi
+
